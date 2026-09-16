@@ -32,6 +32,7 @@ def precompute_freqs_cis(args: DeepSeekV3ModelArgs) -> torch.Tensor:
         return max(0, low_dim), min(dim - 1, high_dim)
 
     def linear_ramp(start: float, end: float, dim: int):
+        """given start and end range of dimensions, linearly scale and clamp them from 0 - 1, where dim <= start = 0 and dim >= end = 1"""
         if start == end:
             end += 0.001
 
@@ -49,7 +50,7 @@ def precompute_freqs_cis(args: DeepSeekV3ModelArgs) -> torch.Tensor:
         freqs = freqs / factor * (1 - smooth) + freqs * smooth
 
     #position indiuces
-    t = torch.arange(seqlen)
+    t = torch.arange(seqlen, dtype=torch.float32)
 
     freqs = torch.outer(t, freqs) #creates rotation frequency for every position, remember the rotation is applied linearly
 
