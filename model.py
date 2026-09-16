@@ -60,6 +60,22 @@ class DeepSeekV3Model(nn.Module):
                 b=cutoff_factor * final_out_std,
             )
 
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        """
+        accept token args as either token ids are embedded depending on pipeline parallelism
+        tokens -> hidden layers -> rms norm -> output
+        same for output
+        """
+
+        x = self.tok_embeddings(tokens) if self.tok_embeddings is not None else tokens
+        for layers in self.layers.values():
+            x = layers(x, self.freqs_cis)
+        x = self.norm(x) if self.norm is not None else x
+        output = self.output(x) if self.output is not None else x
+
+        return output
+
+
 
         
         
