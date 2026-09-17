@@ -68,7 +68,8 @@ class Attention(nn.Module):
         #get k
         c = self.wkv_a(x)
         compressed_kv, k_rope = torch.split(
-            c, [self.kv_lora_rank, self.qk_rope_head_dim]
+            c, [self.kv_lora_rank, self.qk_rope_head_dim],
+            dim=-1,
         )
 
         #B, S, rank -> B, S, heads * (k + v) dim
@@ -77,18 +78,32 @@ class Attention(nn.Module):
             batch_size,
             seq_len,
             -1,
-            self.qk_head_dim + self.v_head_dim,
+            self.qk_nope_head_dim + self.v_head_dim,
         )
 
-        k_nope, v = torch.split(expanded_kv, [self.qk_head_dim, self.v_head_dim], dim=-1)
+        k_nope, v = torch.split(expanded_kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
 
         #rope
+        freq_cis = freq_cis[:seq_len]
         q_rope = apply_rotary_emb(q_rope, freq_cis)
+        k_rope = k_rope.unsqueeze(2)
         k_rope = apply_rotary_emb(k_rope, freq_cis)
 
-
+        #concat rope -> [B, S, rope_dim] -> [B, S, heads, rope_dim]
+        q = torch.concat(q_nope, q_rope.expand(-1, -1, self.n_heads, -1), dim=-1)
+        k = torch.concat(k_nope, k_rope.expand(-1, - 1, self.n_heads, -1), dim=-1)
         
+        #shift my head forward so it becomes seq len, head_dim -> seq_len, seq_len
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = k.transpose(1, 2)
 
+        output = self.inner_attention(q, k, v, scale=self.softmax_scale)
+        #(B, H, S, head_dim) -> (B, S, heads, head_dim) -> flatten last two
+        output = output.transpose(1, 2).contiguous()
+
+        output = output.view(batch_size, seq_len, -1)
+        return self.wo(output)
 
 
 
