@@ -5,6 +5,7 @@ from torch import nn
 
 from distributed_training.model.moe import MoEArgs
 
+
 @dataclass
 class DeepSeekV3ModelArgs:
     max_seq_len: int = 4096 * 4
