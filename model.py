@@ -179,6 +179,54 @@ class Attention(nn.Module):
         return self.wo(output)
 
 
+    def forward_absorbed(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len, _ = x.shape
+
+        q_c_proj = self.wq_abs(x)
+        q_c_proj = q_c_proj.view(
+            batch_size,
+            seq_len, 
+            self.n_heads,
+            self.kv_lora_rank + self.qk_rope_head_dim,
+        )
+
+        q_nope, q_rope = torch.split(
+            q_c_proj,
+            [self.kv_lora_rank, self.qk_rope_head_dim],
+            dim=-1,
+        )
+        q_rope = apply_rotary_emb(q_rope, freqs_cis)
+
+        #swap seq len with heads for attention
+        q = torch.cat([q_nope, q_rope], dim=-1).transpose(1,2)
+
+        #[n_heads, respective dim]
+        c, k_rope = torch.split(
+            self.wkv_a(x),
+            [self.kv_lora_rank, self.qk_rope_head_dim],
+            dim=-1
+        )
+
+        k_rope = apply_rotary_emb(k_rope.unsqueeze(2), freqs_cis)
+        latent = self.kv_norm(latent)
+
+        shared_cache = torch.cat(
+            [latent.unsqueeze(2), k_rope],
+            dim=-1,
+        ).transpose(1, 2)
+
+        k = shared_cache
+        v = shared_cache[..., : self.kv_lora_rank]
+
+        latent_output = self.inner_attention(q, k, v, scale=self.softmax_scale)
+        
+        latent_output =  latent_output.transpose(1, 2).contiguous().view(
+            batch_size,
+            seq_len,
+            self.n_heads * self.kv_lora_rank
+        )
+
+        return self.wo_abs(latent_output)
 
 class TransformerBlock(nn.Module):
 
