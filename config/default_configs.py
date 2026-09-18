@@ -1,6 +1,6 @@
-from torchfeather.config.job_config import JobConfig
-from torchfeather.model.model_args import DeepSeekV3ModelArgs
-from torchfeather.model.moe.moe import MoEArgs
+from internals.config.job_config import JobConfig
+from internals.model.model_args import DeepSeekV3ModelArgs
+from internals.model.moe.moe import MoEArgs
 
 
 def get_deepseek_v3_model_args() -> DeepSeekV3ModelArgs:
