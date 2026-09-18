@@ -50,6 +50,80 @@ class Attention(nn.Module):
         self.inner_attention = ScaledDotProductAttentionWrapper()
 
 
+    @torch.no_grad()
+    def absorb_mla_weights(self):
+        if self.q_lora_rank != 0:
+            raise NotImplementedError(
+                "Hello I haven't built that yet thanks"
+            )
+        
+        #wq shape - > [n_heads * (nope + rope_dim), hidden dim] -> [n_heads, (nope+rope_dim), hidden_dim]
+        wq_a = self.wq_a.weight.view(self.n_heads, (self.qk_nope_head_dim + self.qk_rope_head_dim), self.dim)
+
+        #(n_head, respective dim, hidden_dim)
+        q_nope, q_rope = torch.split(wq_a, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=1)
+
+        #wk_b shape -> (n_heads * nope + vdim, kv_lora_rank) 
+        wk_b = self.wkv_b.weight.view(self.n_heads, (self.qk_nope_head_dim + self.v_head_dim), self.kv_lora_rank)
+        k_nope, v = torch.split(wk_b, [self.qk_nope_head_dim, self.v_head_dim], dim=1)
+
+        #get fused qk_nope weight 
+        #wkv_a (total dim, hidden_dim), float reduces accumulation error as weights are repeatedly reused
+        wkv_bT = k_nope.float().transpose(1, 2) #[n_heads, nope_dim, kv_lora_rank] -> [n_heads, kv_lora_rank, nope_dim]
+        fused_qk_nope = torch.bmm(wkv_bT, q_nope.float()).to(dtype=self.wq_a.weight.dtype) #[n_head, kv_lora_rank, nope_dim] @ [n_head, nope_dim, hidden_dim] -> [n_head, kv_lora_rank, hidden_dim]
+
+        #[n_heads, (kv_lora_rank+rope_dim), hidden_dim]
+        wq_abs = torch.cat([fused_qk_nope, q_rope], dim = 1).reshape(
+            self.n_heads * (self.kv_lora_rank + self.qk_rope_head_dim),
+            self.dim,
+        )
+
+        self.wq_abs = nn.Linear(
+            self.dim,
+            self.n_heads * (self.kv_lora_rank + self.qk_rope_head_dim),
+            bias=False,
+            device=self.wq_a.weight.device,
+            dtype=self.wq_a.weight.dtype,
+        )
+
+        self.wq_abs.weight.copy_(wq_abs)
+        self.wq_abs.requires_grad_(False)
+
+        #[hidden dim, n_heads * v_head_dim] -> [n_heads, hidden_dim, v_head_dim]
+        w_o = self.wo.weight.view(
+            self.dim, 
+            self.n_heads,
+            self.v_head_dim,
+        ).permute(1, 0, 2)
+
+        #absorb w_uv for output  [n_heads, hidden dim, v_head_dim] @ [n_heads, v_head_dim, kv_lora_rank] -> [n_heads, hidden dim, kv_lora_rank]
+        w_o_abs = torch.bmm(
+            w_o.float(),
+            v.float(),
+        ).to(dtype=self.wq_a.weight.dtype)
+
+        #[n_heads, hidden dim, kv_lora_rank] -> [hidden_dim, n_heads * kv_lora_rank]
+        w_o_abs = w_o_abs.permute(
+            1, 0, 2
+        ).reshape(
+            self.dim,
+            self.n_heads * self.kv_lora_rank,
+        )
+
+        self.w_o_abs = nn.Linear(
+            self.n_heads * self.kv_lora_rank,
+            self.dim,
+            bias=False,
+            device=self.wq_a.weight.device,
+            dtype=self.wq_a.weight.dtype,
+        )
+
+        self.w_o_abs.weight.copy_(w_o_abs)
+        self.w_o_abs.requires_grad_(False)
+
+
+
+
     @torch.compile
     def forward(
         self,
